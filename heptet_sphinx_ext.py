@@ -1,9 +1,12 @@
 from pathlib import Path
 from sphinx.environment.adapters.toctree import TocTree
+from docutils.core import publish_parts
 from sphinx.locale import _, __
 from sphinx.transforms import SphinxTransform
 from sphinx.util import logging
-from sphinx.util.docutils import SphinxTranslator
+from docutils.io import DocTreeInput, StringOutput
+from sphinx.util.docutils import SphinxTranslator, new_document
+from sphinx.writers.html import HTMLWriter, HTMLTranslator
 import docutils.nodes as nodes
 import docutils.utils
 import json
@@ -22,6 +25,104 @@ class toctree_list(nodes.Element): pass
 class toctree_list_item(nodes.Element): pass
 class toctree_link(nodes.Element): pass
 class links(nodes.Element): pass
+
+class TocVisitor1(SphinxTranslator):
+    def __init__(self, document, builder, docname):
+        super().__init__(document, builder)
+        self.context=[]
+        
+    def visit_bullet_list(self, node):
+        self.context.append([])
+
+    def depart_bullet_list(self, node):
+        contents = self.context.pop()
+        content = self.builder.templates.render('toc_bullet_list.html',{"contents": ''.join(contents)})
+        self.context.append(content)
+
+    def visit_list_item(self, node):
+        self.context.append([])
+
+    def depart_list_item(self, node):
+        contents = self.context.pop()
+        content = self.builder.templates.render('toctree_entry.html',{"contents": ''.join(contents)})
+        self.context.append(content)
+
+    def visit_compact_paragraph(self, node):
+        pass
+    def depart_compact_paragraph(self, node):
+        pass
+    def render_partial(self, node):
+        """Utility: Render a lone doctree node."""
+        if node is None:
+            return {'fragment': ''}
+        doc = new_document('<partial node>')
+        doc.append(node)
+
+        writer = HTMLWriter(self.builder)
+        val = publish_parts(reader_name='doctree',
+                             writer=writer,
+                             source_class=DocTreeInput,
+                             settings_overrides={'output_encoding': 'unicode'},
+                             source=doc)
+        return (writer.document, val)
+
+    def visit_reference(self, node):
+        n2 = node.deepcopy()
+        p = nodes.paragraph('', '', n2)
+        assert n2.parent == p
+        (doc, val) = self.render_partial(p)
+#        print('%r', doc)
+        
+        render = val['body']
+        print(render)
+        render = re.sub(r"</p>$", '', re.sub(r"^<p>", '', render))
+        print( re.match(r"<a([^>]*)>(.*)</a>$", 'm'))
+        vars={"render": render,"att":{k:v for (k, v) in doc[0][0].attlist()}}
+#        print(json.dumps(vars, indent=4))
+        content = self.builder.templates.render('reference.html',vars)
+        self.context.append(content)
+        raise nodes.SkipChildren
+
+    def depart_reference(self, node):
+        pass
+    def visit_Text(self, node):
+        pass
+    def depart_Text(self, node):
+        pass
+    def visit_toctree(self, node):
+        self.context.append([])
+        
+    def depart_toctree(self, node):
+        contents = self.context.pop()
+        content = self.builder.templates.render('toctree.html',{"contents": ''.join(contents)})
+        self.context.append(content)
+
+    def visit_caption(self, node):
+        raise Exception
+    def depart_caption(self, node):
+        pass
+    def unknown_visit(self, node):
+        raise Exception
+    def unknown_departure(self, node):
+        pass
+
+class TocTreeTemplater(SphinxTransform):
+    default_priority = 900
+    def apply(self, **kwargs):
+        app = self.app
+        builder= app.builder
+
+        docname = app.env.docname
+        toctree = app.env.tocs[docname]#TocTree(app.env).get_toctree_for(master_doc, builder, False)
+        if toctree:
+            visitor = TocVisitor1(self.document, builder, app.config.master_doc)
+#            visitor.new['master'] = True
+            toctree.walkabout(visitor)
+            print(''.join(visitor.context.pop()))
+                            
+            
+    
+        
 
 class TransformIndexNodes(SphinxTransform):
     default_priority = 900
@@ -81,7 +182,6 @@ class RemoveDocumentSourceAttr(SphinxTransform):
 class AddLocalToc(SphinxTransform):
     default_priority = 900
     def apply(self, **kwargs):
-        assert 0
         source = re.sub('\.[^\.]+$', '', self.document['source'])
         docname = os.path.relpath(source, self.app.srcdir)
         self_toc = TocTree(self.env).get_toc_for(docname, self.app.builder)
@@ -117,7 +217,7 @@ def doctree_resolved(app, doctree, docname):
     refs = []
     for ref in doctree.traverse(document_link):
         refs.append(ref.deepcopy())
-#        logger.warning('found link %s', ref['xlink:href'])
+        logger.warning('found link %s', ref['xlink:href'])
 
     if not hasattr(app.env, 'testext_refs'):
         env_refs = {}
@@ -137,8 +237,10 @@ def build_finished(app, exception):
     document = docutils.utils.new_document('')
     document['xmlns:xlink'] = "http://www.w3.org/1999/xlink"
     for (docname, v) in app.env.testext_refs.items():
+
         doclink = document_ref('', **{'xmlns:href': docname,
                                       'xmlns:role': 'http://heptet.us/linkprops/document'})
+        logger.info('%r', doclink)
         refs = v['refs']
         links_elem.children.insert(0, doclink)
         links_elem.children.extend(refs)
@@ -213,10 +315,16 @@ def build_finished(app, exception):
     document.children.append(links_elem)
     app.builder.write_doc('_links', document)
 
+def html_page_context(self, pagename, templatename, ctx, event_arg):
+#    print(templatename)
+    pass
+
+    
 def setup(app):
-    app.connect('doctree-read', doctree_read)
+#    app.connect('doctree-read', doctree_read)
+    app.connect('html-page-context', html_page_context)
     app.connect('doctree-resolved', doctree_resolved)
-    app.connect('build-finished', build_finished)
+#    app.connect('build-finished', build_finished)
     app.add_node(rel_links)
     app.add_node(document_link)
     app.add_node(document_ref)
@@ -228,7 +336,9 @@ def setup(app):
     app.add_node(toctree_link)
     app.add_node(links)
     app.add_post_transform(TransformIndexNodes)
-#    app.add_post_transform(AddLocalToc)
-    app.add_post_transform(AddXlinkNamespace)
-    app.add_post_transform(RemoveDocumentSourceAttr)
-    app.add_post_transform(AddRelLinks)
+#    app.add_post_transform(TransformTocTree)
+    app.add_post_transform(TocTreeTemplater)
+    #app.add_post_transform(AddLocalToc)
+#    app.add_post_transform(AddXlinkNamespace)
+    #app.add_post_transform(RemoveDocumentSourceAttr)
+#    app.add_post_transform(AddRelLinks)
