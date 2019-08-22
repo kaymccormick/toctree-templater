@@ -1,3 +1,4 @@
+
 from pathlib import Path
 from sphinx.environment.adapters.toctree import TocTree
 from docutils.core import publish_parts
@@ -70,14 +71,21 @@ class TocVisitor1(SphinxTranslator):
         n2 = node.deepcopy()
         p = nodes.paragraph('', '', n2)
         assert n2.parent == p
-        (doc, val) = self.render_partial(p)
+        val = self.builder.render_partial(p)
 #        print('%r', doc)
         
         render = val['body']
-        print(render)
+        print('2', render)
         render = re.sub(r"</p>$", '', re.sub(r"^<p>", '', render))
-        print( re.match(r"<a([^>]*)>(.*)</a>$", 'm'))
-        vars={"render": render,"att":{k:v for (k, v) in doc[0][0].attlist()}}
+        print('1', render)
+        result = re.match(r"<a([^>]*)>(.*)</a>$", render, re.MULTILINE)
+        if result:
+            linktext = result.group(2)
+        else:
+            linktext = None
+            
+        vars={"render": render, "linktext":  linktext,
+              "att":{k:v for (k, v) in node.attlist()}}
 #        print(json.dumps(vars, indent=4))
         content = self.builder.templates.render('reference.html',vars)
         self.context.append(content)
@@ -94,7 +102,8 @@ class TocVisitor1(SphinxTranslator):
         
     def depart_toctree(self, node):
         contents = self.context.pop()
-        content = self.builder.templates.render('toctree.html',{"contents": ''.join(contents)})
+        content = self.builder.templates.render('toctree.html',
+                                                {"contents": ''.join(contents)})
         self.context.append(content)
 
     def visit_caption(self, node):
@@ -118,10 +127,14 @@ class TocTreeTemplater(SphinxTransform):
             visitor = TocVisitor1(self.document, builder, app.config.master_doc)
 #            visitor.new['master'] = True
             toctree.walkabout(visitor)
-            print(''.join(visitor.context.pop()))
-                            
-            
-    
+            print('here1')
+            toctree_html = ''.join(visitor.context.pop())
+            setattr(app.env, 'toctree_html', toctree_html)
+            toctree_html_node = nodes.raw('', toctree_html)
+            for t in self.document.traverse(addnodes.toctree):
+                i = t.parent.children.index(t)
+                t.parent.children = [*t.parent.children[0:i - 1],
+                                     toctree_html_node, *t.parent.children[i + 1:]]
         
 
 class TransformIndexNodes(SphinxTransform):
@@ -316,8 +329,9 @@ def build_finished(app, exception):
     app.builder.write_doc('_links', document)
 
 def html_page_context(self, pagename, templatename, ctx, event_arg):
-#    print(templatename)
-    pass
+    if hasattr(self.env, 'toctree_html'):
+        ctx['toc'] = self.env.toctree_html
+#        ctx['toctree'] = lambda **kw: self.env.toctree_html
 
     
 def setup(app):
