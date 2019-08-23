@@ -60,12 +60,9 @@ class TocVisitor1(SphinxTranslator):
         p = nodes.paragraph('', '', n2)
         assert n2.parent == p
         val = self.builder.render_partial(p)
-#        print('%r', doc)
         
         render = val['body']
-        print('2', render)
         render = re.sub(r"</p>$", '', re.sub(r"^<p>", '', render))
-        print('1', render)
         result = re.match(r"<a([^>]*)>(.*)</a>$", render, re.MULTILINE)
         if result:
             linktext = result.group(2)
@@ -74,7 +71,6 @@ class TocVisitor1(SphinxTranslator):
             
         vars={"render": render, "linktext":  linktext,
               "att":{k:v for (k, v) in node.attlist()}}
-#        print(json.dumps(vars, indent=4))
         content = self.builder.templates.render('reference.html',vars)
         self.context.append(content)
         raise nodes.SkipChildren
@@ -134,5 +130,4 @@ def html_page_context(self, pagename, templatename, ctx, event_arg):
     
 def setup(app):
     app.connect('html-page-context', html_page_context)
-    app.connect('doctree-resolved', doctree_resolved)
     app.add_post_transform(TocTreeTemplater)
